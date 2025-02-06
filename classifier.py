@@ -5,7 +5,27 @@ class NeuralNet:
     Encapsulates the neural network logic for training and prediction.
     """
 
-    def __init__(self, input_size, hidden_size=32, output_size=4, learning_rate=0.01, epochs=150, l2_lambda=0.001):
+    def __init__(self, 
+                 input_size, 
+                 hidden_size=32, 
+                 output_size=4, 
+                 learning_rate=0.01, 
+                 epochs=150, 
+                 l2_lambda=0.001,
+                 batch_size=None, 
+                 descent_type='batch'):
+        """
+        Parameters:
+            input_size   (int): Number of input features.
+            hidden_size  (int): Number of neurons in the hidden layer.
+            output_size  (int): Number of output classes.
+            learning_rate(float): Learning rate for parameter updates.
+            epochs       (int): Number of training iterations.
+            l2_lambda    (float): L2 regularisation strength.
+            batch_size   (int): Size of each mini-batch for mini-batch gradient descent. 
+                                If None, the entire dataset is used per iteration (batch GD).
+            descent_type (str): 'batch' or 'mini-batch'.
+        """
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
@@ -14,6 +34,8 @@ class NeuralNet:
         self.learning_rate = learning_rate
         self.epochs = epochs
         self.l2_lambda = l2_lambda
+        self.batch_size = batch_size
+        self.descent_type = descent_type
 
         # Initialise weights and biases using He initialisation
         self._init_parameters()
@@ -42,27 +64,39 @@ class NeuralNet:
             y_integer (np.ndarray): Target labels (0-3).
         """
         for epoch in range(self.epochs):
-            # Shuffle data at each epoch
+            # Shuffle the entire dataset each epoch
             indices = np.arange(X.shape[0])
             np.random.shuffle(indices)
             X_shuffled = X[indices]
             y_shuffled = y_integer[indices]
 
-            # Forward pass
-            hidden_layer, hidden_activation, output_layer, probs = self._forward_pass(X_shuffled)
+            # Decide on batch or mini-batch training
+            if self.descent_type == 'batch' or self.batch_size is None:
+                # Treat the entire dataset as one batch
+                hidden_layer, hidden_activation, output_layer, probs = self._forward_pass(X_shuffled)
+                total_loss, data_loss = self._compute_loss(probs, y_shuffled)
+                dW1, db1, dW2, db2 = self._backward_pass(X_shuffled, y_shuffled, 
+                                                        hidden_layer, hidden_activation, probs)
+                self._update_parameters(dW1, db1, dW2, db2)
 
-            # Compute loss
-            total_loss, data_loss = self._compute_loss(probs, y_shuffled)
+            elif self.descent_type == 'mini-batch':
+                # Break the dataset into mini-batches of size self.batch_size
+                for start_idx in range(0, X_shuffled.shape[0], self.batch_size):
+                    end_idx = start_idx + self.batch_size
+                    X_batch = X_shuffled[start_idx:end_idx]
+                    y_batch = y_shuffled[start_idx:end_idx]
 
-            # Backward pass
-            dW1, db1, dW2, db2 = self._backward_pass(X_shuffled, y_shuffled, hidden_layer, hidden_activation, probs)
-
-            # Update parameters
-            self._update_parameters(dW1, db1, dW2, db2)
+                    hidden_layer, hidden_activation, output_layer, probs = self._forward_pass(X_batch)
+                    total_loss, data_loss = self._compute_loss(probs, y_batch)
+                    dW1, db1, dW2, db2 = self._backward_pass(X_batch, y_batch, 
+                                                            hidden_layer, hidden_activation, probs)
+                    self._update_parameters(dW1, db1, dW2, db2)
 
             # Print training metrics every 10 epochs
             if epoch % 10 == 0:
                 accuracy = self._compute_accuracy(X, y_integer)
+                # Note: total_loss is computed either above (batch) 
+                #       or in the last mini-batch iteration
                 print(f"{epoch}\t{total_loss:.4f}\t\t{accuracy * 100:.2f}%")
 
     def predict_proba(self, X):
@@ -172,6 +206,12 @@ class Classifier:
         self.epochs = 150
         self.l2_lambda = 0.001  # L2 regularisation strength
 
+        # Choose a batch size for mini-batch training
+        self.batch_size = 32
+
+        # Choose descent_type: 'batch' or 'mini-batch'
+        self.descent_type = 'mini-batch'
+
         print(f"Classifier initialised with {self.hidden_size} hidden units and learning rate {self.learning_rate}")
 
     def reset(self):
@@ -195,7 +235,7 @@ class Classifier:
         y_integer = np.array(target, dtype=np.int32)
         print(f"\nStarting training with {len(X)} samples...")
 
-        # Initialise the neural network on first fit
+        # Initialise the neural network on the first fit
         if self.nn is None:
             input_size = X.shape[1]
             print(f"First fit - initialising input size to {input_size}")
@@ -204,7 +244,9 @@ class Classifier:
                                 output_size=self.output_size,
                                 learning_rate=self.learning_rate,
                                 epochs=self.epochs,
-                                l2_lambda=self.l2_lambda)
+                                l2_lambda=self.l2_lambda,
+                                batch_size=self.batch_size,
+                                descent_type=self.descent_type)
 
         print("\nTraining progress:")
         print("Epoch\tLoss\t\tTraining Accuracy")
@@ -239,8 +281,9 @@ class Classifier:
             elif move == 'West':
                 legal_actions.append(3)
 
+        # Fallback in case there are no legal actions
         if not legal_actions:
-            return np.random.randint(4)  # Fallback if no legal actions
+            return np.random.randint(4)
 
         # Select the legal action with the highest probability
         legal_probs = probs[0][legal_actions]
