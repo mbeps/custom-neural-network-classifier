@@ -7,7 +7,7 @@ class Classifier:
     """
 
     def __init__(self):
-        """Initialize the classifier with default parameters."""
+        """Initialise the classifier with default parameters."""
         self.input_size = None  # Determined during first fit call
         self.hidden_size = 32   # Number of neurons in the hidden layer
         self.output_size = 4    # Corresponding to 4 possible actions
@@ -16,17 +16,20 @@ class Classifier:
         self.bias1 = None       # Hidden layer bias
         self.bias2 = None       # Output layer bias
         self.learning_rate = 0.01
-        self.epochs = 100
-        self.l2_lambda = 0.001  # L2 regularization strength
+        self.epochs = 150
+        self.l2_lambda = 0.001  # L2 regularisation strength
+        print(f"Classifier initialised with {self.hidden_size} hidden units and learning rate {self.learning_rate}")
 
     def reset(self):
-        """Re-initialize the model's weights and biases."""
+        """Re-initialise the model's weights and biases."""
+        print("\nResetting model weights and biases...")
         if self.input_size is not None:
-            # He initialization for ReLU activation
+            # He initialisation for ReLU activation
             self.weights1 = np.random.randn(self.input_size, self.hidden_size) * np.sqrt(2. / self.input_size)
             self.weights2 = np.random.randn(self.hidden_size, self.output_size) * np.sqrt(2. / self.hidden_size)
             self.bias1 = np.zeros((1, self.hidden_size))
             self.bias2 = np.zeros((1, self.output_size))
+            print(f"Model reset complete. Input size: {self.input_size}, Hidden size: {self.hidden_size}, Output size: {self.output_size}")
 
     def fit(self, data, target):
         """
@@ -37,15 +40,21 @@ class Classifier:
             target (list): Corresponding action labels (0-3).
         """
         X = np.array(data, dtype=np.float32)
-        y = np.array(target, dtype=np.int32)
+        y_integer = np.array(target, dtype=np.int32)
+        print(f"\nStarting training with {len(X)} samples...")
 
-        # Initialize model parameters on first fit
+        # Initialise model parameters on first fit
         if self.input_size is None:
             self.input_size = X.shape[1]
+            print(f"First fit - initialising input size to {self.input_size}")
             self.reset()
 
+        print("\nTraining progress:")
+        print("Epoch\tLoss\t\tTraining Accuracy")
+        print("-" * 40)
+
         # Convert targets to one-hot encoding
-        y_onehot = np.eye(self.output_size)[y]
+        y_onehot = np.eye(self.output_size)[y_integer]
 
         # Training loop
         for epoch in range(self.epochs):
@@ -53,6 +62,7 @@ class Classifier:
             indices = np.arange(X.shape[0])
             np.random.shuffle(indices)
             X_shuffled = X[indices]
+            y_integer_shuffled = y_integer[indices]  # Ensure labels match data order
             y_shuffled = y_onehot[indices]
 
             # Forward pass
@@ -65,15 +75,15 @@ class Classifier:
             exp_scores = np.exp(shifted_logits)
             probs = exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
 
-            # Compute loss (cross-entropy with L2 regularization)
-            correct_logprobs = -np.log(probs[range(X.shape[0]), y] + 1e-8)
+            # Compute loss (cross-entropy with L2 regularisation)
+            correct_logprobs = -np.log(probs[range(X.shape[0]), y_integer_shuffled] + 1e-8)
             data_loss = np.sum(correct_logprobs) / X.shape[0]
             reg_loss = 0.5 * self.l2_lambda * (np.sum(self.weights1**2) + np.sum(self.weights2**2))
             total_loss = data_loss + reg_loss
 
             # Backward pass
             d_output = probs.copy()
-            d_output[range(X.shape[0]), y] -= 1
+            d_output[range(X.shape[0]), y_integer_shuffled] -= 1
             d_output /= X.shape[0]
 
             # Compute gradients
@@ -90,6 +100,20 @@ class Classifier:
             self.bias2 -= self.learning_rate * db2
             self.weights1 -= self.learning_rate * dW1
             self.bias1 -= self.learning_rate * db1
+
+            # Check model learning: calculate training accuracy every 10 epochs
+            if epoch % 10 == 0:
+                # Forward pass on the entire training set
+                hidden_all = np.dot(X, self.weights1) + self.bias1
+                hidden_all_activation = np.maximum(0, hidden_all)
+                output_all = np.dot(hidden_all_activation, self.weights2) + self.bias2
+                shifted_logits_all = output_all - np.max(output_all, axis=1, keepdims=True)
+                exp_scores_all = np.exp(shifted_logits_all)
+                probs_all = exp_scores_all / np.sum(exp_scores_all, axis=1, keepdims=True)
+                predictions = np.argmax(probs_all, axis=1)
+                accuracy = np.mean(predictions == y_integer)
+
+                print(f"{epoch}\t{total_loss:.4f}\t\t{accuracy*100:.2f}%")
 
     def predict(self, features, legal) -> int:
         """
@@ -114,8 +138,7 @@ class Classifier:
         exp_scores = np.exp(shifted_logits)
         probs = exp_scores / np.sum(exp_scores)
 
-        # Since convertNumberToMove in classifierAgent handles the conversion:
-        # 0 = NORTH, 1 = EAST, 2 = SOUTH, 3 = WEST
+        # Convert legal moves to numerical actions
         legal_actions = []
         for move in legal:
             if move == 'North': legal_actions.append(0)
