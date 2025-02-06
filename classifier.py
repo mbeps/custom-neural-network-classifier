@@ -5,26 +5,31 @@ class NeuralNet:
     Encapsulates the neural network logic for training and prediction.
     """
 
-    def __init__(self, 
-                 input_size, 
-                 hidden_size=32, 
-                 output_size=4, 
-                 learning_rate=0.01, 
-                 epochs=150, 
-                 l2_lambda=0.001,
-                 batch_size=None, 
-                 descent_type='batch'):
+    def __init__(
+        self, 
+        input_size, 
+        hidden_size=32, 
+        output_size=4, 
+        learning_rate=0.01, 
+        epochs=150, 
+        l2_lambda=0.001,
+        batch_size=None, 
+        descent_type='batch',
+        momentum=0.9,
+        lr_decay=0.0
+    ):
         """
         Parameters:
             input_size   (int): Number of input features.
             hidden_size  (int): Number of neurons in the hidden layer.
             output_size  (int): Number of output classes.
-            learning_rate(float): Learning rate for parameter updates.
+            learning_rate(float): Initial learning rate for parameter updates.
             epochs       (int): Number of training iterations.
             l2_lambda    (float): L2 regularisation strength.
-            batch_size   (int): Size of each mini-batch for mini-batch gradient descent. 
-                                If None, the entire dataset is used per iteration (batch GD).
+            batch_size   (int): Size of each mini-batch. If None, batch gradient descent is used.
             descent_type (str): 'batch' or 'mini-batch'.
+            momentum     (float): Momentum coefficient for accelerating gradient descent.
+            lr_decay     (float): Exponential decay rate for the learning rate per epoch.
         """
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -36,9 +41,12 @@ class NeuralNet:
         self.l2_lambda = l2_lambda
         self.batch_size = batch_size
         self.descent_type = descent_type
+        self.momentum = momentum
+        self.lr_decay = lr_decay
 
-        # Initialise weights and biases using He initialisation
+        # Initialise weights, biases, and velocities
         self._init_parameters()
+        self._init_velocity()
 
     def _init_parameters(self):
         """
@@ -49,11 +57,21 @@ class NeuralNet:
         self.bias1 = np.zeros((1, self.hidden_size))
         self.bias2 = np.zeros((1, self.output_size))
 
+    def _init_velocity(self):
+        """
+        Initialise velocity terms for momentum-based updates (set to zero initially).
+        """
+        self.velocity_w1 = np.zeros_like(self.weights1)
+        self.velocity_b1 = np.zeros_like(self.bias1)
+        self.velocity_w2 = np.zeros_like(self.weights2)
+        self.velocity_b2 = np.zeros_like(self.bias2)
+
     def reset(self):
         """
-        Reset the network's weights and biases.
+        Reset the network's weights, biases, and velocities.
         """
         self._init_parameters()
+        self._init_velocity()
 
     def fit(self, X, y_integer):
         """
@@ -64,7 +82,10 @@ class NeuralNet:
             y_integer (np.ndarray): Target labels (0-3).
         """
         for epoch in range(self.epochs):
-            # Shuffle the entire dataset each epoch
+            # Decay the learning rate if lr_decay > 0
+            current_lr = self.learning_rate * (1.0 - self.lr_decay) ** epoch
+
+            # Shuffle the dataset each epoch
             indices = np.arange(X.shape[0])
             np.random.shuffle(indices)
             X_shuffled = X[indices]
@@ -72,15 +93,15 @@ class NeuralNet:
 
             # Decide on batch or mini-batch training
             if self.descent_type == 'batch' or self.batch_size is None:
-                # Treat the entire dataset as one batch
+                # One single batch for the entire dataset
                 hidden_layer, hidden_activation, output_layer, probs = self._forward_pass(X_shuffled)
                 total_loss, data_loss = self._compute_loss(probs, y_shuffled)
                 dW1, db1, dW2, db2 = self._backward_pass(X_shuffled, y_shuffled, 
                                                         hidden_layer, hidden_activation, probs)
-                self._update_parameters(dW1, db1, dW2, db2)
+                self._update_parameters(dW1, db1, dW2, db2, current_lr)
 
             elif self.descent_type == 'mini-batch':
-                # Break the dataset into mini-batches of size self.batch_size
+                # Split data into mini-batches
                 for start_idx in range(0, X_shuffled.shape[0], self.batch_size):
                     end_idx = start_idx + self.batch_size
                     X_batch = X_shuffled[start_idx:end_idx]
@@ -88,15 +109,13 @@ class NeuralNet:
 
                     hidden_layer, hidden_activation, output_layer, probs = self._forward_pass(X_batch)
                     total_loss, data_loss = self._compute_loss(probs, y_batch)
-                    dW1, db1, dW2, db2 = self._backward_pass(X_batch, y_batch, 
+                    dW1, db1, dW2, db2 = self._backward_pass(X_batch, y_batch,
                                                             hidden_layer, hidden_activation, probs)
-                    self._update_parameters(dW1, db1, dW2, db2)
+                    self._update_parameters(dW1, db1, dW2, db2, current_lr)
 
             # Print training metrics every 10 epochs
             if epoch % 10 == 0:
                 accuracy = self._compute_accuracy(X, y_integer)
-                # Note: total_loss is computed either above (batch) 
-                #       or in the last mini-batch iteration
                 print(f"{epoch}\t{total_loss:.4f}\t\t{accuracy * 100:.2f}%")
 
     def predict_proba(self, X):
@@ -141,7 +160,7 @@ class NeuralNet:
             data_loss (float): Cross-entropy loss.
         """
         correct_logprobs = -np.log(probs[range(probs.shape[0]), y_integer] + 1e-8)
-        data_loss = np.sum(correct_logprobs) / probs.shape[0]
+        data_loss = np.mean(correct_logprobs)
         reg_loss = 0.5 * self.l2_lambda * (np.sum(self.weights1 ** 2) + np.sum(self.weights2 ** 2))
         total_loss = data_loss + reg_loss
         return total_loss, data_loss
@@ -168,14 +187,22 @@ class NeuralNet:
 
         return dW1, db1, dW2, db2
 
-    def _update_parameters(self, dW1, db1, dW2, db2):
+    def _update_parameters(self, dW1, db1, dW2, db2, current_lr):
         """
-        Update network parameters using the computed gradients.
+        Update network parameters using momentum-based updates
+        with the (optionally) decayed learning rate.
         """
-        self.weights2 -= self.learning_rate * dW2
-        self.bias2 -= self.learning_rate * db2
-        self.weights1 -= self.learning_rate * dW1
-        self.bias1 -= self.learning_rate * db1
+        # Update velocity
+        self.velocity_w1 = self.momentum * self.velocity_w1 - current_lr * dW1
+        self.velocity_b1 = self.momentum * self.velocity_b1 - current_lr * db1
+        self.velocity_w2 = self.momentum * self.velocity_w2 - current_lr * dW2
+        self.velocity_b2 = self.momentum * self.velocity_b2 - current_lr * db2
+
+        # Update weights and biases
+        self.weights1 += self.velocity_w1
+        self.bias1 += self.velocity_b1
+        self.weights2 += self.velocity_w2
+        self.bias2 += self.velocity_b2
 
     def _compute_accuracy(self, X, y_integer):
         """
@@ -206,11 +233,13 @@ class Classifier:
         self.epochs = 150
         self.l2_lambda = 0.001  # L2 regularisation strength
 
-        # Choose a batch size for mini-batch training
+        # Mini-batch settings
         self.batch_size = 32
-
-        # Choose descent_type: 'batch' or 'mini-batch'
         self.descent_type = 'mini-batch'
+
+        # Momentum and decay hyperparameters
+        self.momentum = 0.9
+        self.lr_decay = 0.01
 
         print(f"Classifier initialised with {self.hidden_size} hidden units and learning rate {self.learning_rate}")
 
@@ -239,20 +268,24 @@ class Classifier:
         if self.nn is None:
             input_size = X.shape[1]
             print(f"First fit - initialising input size to {input_size}")
-            self.nn = NeuralNet(input_size=input_size,
-                                hidden_size=self.hidden_size,
-                                output_size=self.output_size,
-                                learning_rate=self.learning_rate,
-                                epochs=self.epochs,
-                                l2_lambda=self.l2_lambda,
-                                batch_size=self.batch_size,
-                                descent_type=self.descent_type)
+            self.nn = NeuralNet(
+                input_size=input_size,
+                hidden_size=self.hidden_size,
+                output_size=self.output_size,
+                learning_rate=self.learning_rate,
+                epochs=self.epochs,
+                l2_lambda=self.l2_lambda,
+                batch_size=self.batch_size,
+                descent_type=self.descent_type,
+                momentum=self.momentum,
+                lr_decay=self.lr_decay
+            )
 
         print("\nTraining progress:")
         print("Epoch\tLoss\t\tTraining Accuracy")
         print("-" * 40)
 
-        # Train the neural network (the NeuralNet.fit method handles progress printing)
+        # Train the neural network
         self.nn.fit(X, y_integer)
 
     def predict(self, features, legal) -> int:
@@ -281,9 +314,8 @@ class Classifier:
             elif move == 'West':
                 legal_actions.append(3)
 
-        # Fallback in case there are no legal actions
         if not legal_actions:
-            return np.random.randint(4)
+            return np.random.randint(4)  # Fallback if no legal actions
 
         # Select the legal action with the highest probability
         legal_probs = probs[0][legal_actions]
