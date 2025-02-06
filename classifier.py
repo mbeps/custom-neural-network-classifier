@@ -10,12 +10,15 @@ class NeuralNet:
       - Learning Rate Decay
       - Gradient Clipping
       - Early Stopping (when triggered by validation performance)
+
+    Now supports specifying the hidden layer(s) as a list. For this coursework,
+    we still only expect one hidden layer, so the list should be of length 1.
     """
 
     def __init__(
         self,
         input_size,
-        hidden_size=32,
+        hidden_size=32,  # Can be int or list of length 1
         output_size=4,
         learning_rate=0.01,
         epochs=150,
@@ -36,28 +39,39 @@ class NeuralNet:
     ):
         """
         Parameters:
-            input_size     (int): Number of input features.
-            hidden_size    (int): Number of neurons in hidden layer.
-            output_size    (int): Number of output classes.
-            learning_rate  (float): Initial learning rate.
-            epochs         (int): Maximum training epochs.
-            l2_lambda      (float): L2 regularisation strength.
-            batch_size     (int): Mini-batch size; None => full batch.
-            descent_type   (str): 'batch' or 'mini-batch'.
-            momentum       (float): Momentum coefficient.
-            lr_decay       (float): Exponential decay for learning rate.
-            use_batchnorm  (bool): Whether to use batch norm on hidden layer.
-            use_dropout    (bool): Whether to apply dropout on hidden layer.
-            dropout_rate   (float): Dropout probability.
-            use_grad_clip  (bool): Enable gradient clipping if True.
-            grad_clip_norm (float): Max norm for gradient clipping.
-            early_stopping (bool): Whether to enable early stopping.
-            patience       (int): Number of consecutive epochs allowed without improvement.
-            validation_data(tuple): (X_val, y_val) used for early stopping checks.
+            input_size       (int): Number of input features.
+            hidden_size (int or list): If int, we interpret it as a single hidden layer
+                                       with that many neurons. If a list of length 1,
+                                       each entry is the number of neurons in that layer.
+            output_size      (int): Number of output classes.
+            learning_rate    (float): Initial learning rate.
+            epochs           (int): Maximum training epochs.
+            l2_lambda        (float): L2 regularisation strength.
+            batch_size       (int): Mini-batch size; None => full batch.
+            descent_type     (str): 'batch' or 'mini-batch'.
+            momentum         (float): Momentum coefficient.
+            lr_decay         (float): Exponential decay for learning rate.
+            use_batchnorm    (bool): Whether to use batch norm on the hidden layer.
+            use_dropout      (bool): Whether to apply dropout on the hidden layer.
+            dropout_rate     (float): Dropout probability.
+            use_grad_clip    (bool): Enable gradient clipping if True.
+            grad_clip_norm   (float): Max norm for gradient clipping.
+            early_stopping   (bool): Whether to enable early stopping.
+            patience         (int): Number of consecutive epochs allowed without improvement.
+            validation_data  (tuple): (X_val, y_val) used for early stopping checks.
         """
-        # Core
+
+        # If hidden_size is an integer, convert it to a single-element list.
+        if isinstance(hidden_size, int):
+            hidden_size = [hidden_size]
+
+        # For this coursework, we still only expect exactly one hidden layer.
+        if len(hidden_size) != 1:
+            raise ValueError("For this coursework, hidden_size must be a single-element list or an integer.")
+
+        # Internally, we'll keep the single hidden layer size as self.hidden_size.
         self.input_size = input_size
-        self.hidden_size = hidden_size
+        self.hidden_size = hidden_size[0]  # single hidden layer
         self.output_size = output_size
 
         # Training hyperparameters
@@ -90,7 +104,7 @@ class NeuralNet:
         self._init_parameters()
         self._init_velocity()
 
-        # Batch norm parameters
+        # Batch norm parameters (for the single hidden layer)
         if self.use_batchnorm:
             self.gamma = np.ones((1, self.hidden_size), dtype=np.float32)
             self.beta = np.zeros((1, self.hidden_size), dtype=np.float32)
@@ -99,6 +113,7 @@ class NeuralNet:
             self.bn_momentum = 0.9
 
     def _init_parameters(self):
+        # Single hidden layer: weights1 => input->hidden, weights2 => hidden->output
         self.weights1 = np.random.randn(self.input_size, self.hidden_size) * np.sqrt(2. / self.input_size)
         self.weights2 = np.random.randn(self.hidden_size, self.output_size) * np.sqrt(2. / self.hidden_size)
         self.bias1 = np.zeros((1, self.hidden_size))
@@ -184,6 +199,7 @@ class NeuralNet:
         return probs
 
     def _forward_pass(self, X, training=True):
+        # First layer: input -> hidden
         z1 = np.dot(X, self.weights1) + self.bias1
 
         if self.use_batchnorm:
@@ -205,13 +221,14 @@ class NeuralNet:
 
         hidden_activation = np.maximum(0, a1_before_relu)
 
-        # Dropout
+        # Dropout on hidden activation
         if self.use_dropout and training:
             dropout_mask = (np.random.rand(*hidden_activation.shape) > self.dropout_rate).astype(hidden_activation.dtype)
             hidden_activation *= dropout_mask
         else:
             dropout_mask = np.ones_like(hidden_activation)
 
+        # Second layer: hidden -> output
         z2 = np.dot(hidden_activation, self.weights2) + self.bias2
 
         # Softmax
@@ -270,7 +287,8 @@ class NeuralNet:
 
             d_z1_hat = da1_before_relu * self.gamma
             d_var = np.sum(d_z1_hat * (cache['z1'] - mu) * -0.5 * (var + eps)**-1.5, axis=0, keepdims=True)
-            d_mu = np.sum(d_z1_hat * -1.0 / np.sqrt(var + eps), axis=0, keepdims=True) + d_var * np.mean(-2.0*(cache['z1']-mu), axis=0, keepdims=True)
+            d_mu = np.sum(d_z1_hat * -1.0 / np.sqrt(var + eps), axis=0, keepdims=True) \
+                   + d_var * np.mean(-2.0*(cache['z1']-mu), axis=0, keepdims=True)
 
             dz1 = (d_z1_hat / np.sqrt(var + eps)) + (d_var * 2.0*(cache['z1']-mu)/N) + (d_mu/N)
 
@@ -373,11 +391,12 @@ class Classifier:
         Initialise the classifier. The neural network will be created on the first call to fit.
         """
         self.nn = None
-        self.hidden_size = 32   # Number of neurons in hidden layer
-        self.output_size = 4    # 4 possible actions
+        # Now store the hidden layer in a list form to reflect the new approach:
+        self.hidden_layers = [24]   # Single hidden layer with 32 neurons
+        self.output_size = 4       # 4 possible actions
         self.learning_rate = 0.01
         self.epochs = 150
-        self.l2_lambda = 0.001  # L2 regularisation strength
+        self.l2_lambda = 0.001     # L2 regularisation strength
 
         self.batch_size = 32
         self.descent_type = 'mini-batch'
@@ -398,7 +417,7 @@ class Classifier:
         # Hyperparameter search toggle
         self.enable_grid_search = True
 
-        print(f"Classifier initialised with hidden_size={self.hidden_size}, learning_rate={self.learning_rate}")
+        print(f"Classifier initialised with hidden_layers={self.hidden_layers}, learning_rate={self.learning_rate}")
 
     def reset(self):
         """
@@ -473,7 +492,7 @@ class Classifier:
         Initialise the neural network with given parameters or defaults.
         """
         if params is None:
-            hidden_size = self.hidden_size
+            hidden_size = self.hidden_layers[0]
             dropout_rate = self.dropout_rate
         else:
             hidden_size = params['hidden_size']
@@ -482,7 +501,7 @@ class Classifier:
         print(f"Initialising NeuralNet with hidden_size={hidden_size}, dropout_rate={dropout_rate}")
         self.nn = NeuralNet(
             input_size=input_size,
-            hidden_size=hidden_size,
+            hidden_size=hidden_size,    # can be int or [int], but internally it’s handled
             output_size=self.output_size,
             learning_rate=self.learning_rate,
             epochs=self.epochs,
@@ -507,12 +526,12 @@ class Classifier:
         You can expand this with more parameters.
         """
         param_grid = {
-            'hidden_size': [16, 32, 64],
+            'hidden_size': [16, 32, 64],  # these will be interpreted as single-layer sizes
             'dropout_rate': [0.3, 0.5, 0.7],
         }
 
         best_val_acc = -1
-        best_params = {'hidden_size': self.hidden_size, 'dropout_rate': self.dropout_rate}
+        best_params = {'hidden_size': self.hidden_layers[0], 'dropout_rate': self.dropout_rate}
 
         for h in param_grid['hidden_size']:
             for dr in param_grid['dropout_rate']:
