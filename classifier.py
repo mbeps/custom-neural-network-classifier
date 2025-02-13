@@ -150,7 +150,8 @@ class NeuralNet:
     def fit(self, X: np.ndarray, y_integer: np.ndarray) -> None:
         """
         Train the neural network using the provided data X and integer labels y_integer.
-
+        Now prints loss and accuracy for each epoch and overall metrics at the end.
+    
         Parameters:
             X         (np.ndarray): Training data of shape (N, input_size).
             y_integer (np.ndarray): Integer class labels of shape (N,).
@@ -158,60 +159,71 @@ class NeuralNet:
         for epoch in range(self.epochs):
             # Learning rate decay
             current_lr: float = self.learning_rate * (1.0 - self.lr_decay) ** epoch
-
+    
             # Shuffle data
             indices = np.arange(X.shape[0])
             np.random.shuffle(indices)
             X_shuffled = X[indices]
             y_shuffled = y_integer[indices]
-
-            # Batch or mini-batch
+    
+            # Accumulate loss for the epoch
+            epoch_loss: float = 0.0
+            num_batches: int = 0
+    
+            # Batch or mini-batch training
             if self.descent_type == 'batch' or self.batch_size is None:
-                # Single batch
                 _, cache, probs = self._forward_pass(X_shuffled, training=True)
                 total_loss, _ = self._compute_loss(probs, y_shuffled)
                 dW1, db1, dW2, db2, dgamma, dbeta = self._backward_pass(
                     X_shuffled, y_shuffled, cache, probs
                 )
                 self._update_parameters(dW1, db1, dW2, db2, dgamma, dbeta, current_lr)
+                epoch_loss = total_loss
+                num_batches = 1
             else:
-                # Mini-batches
                 for start_idx in range(0, X_shuffled.shape[0], self.batch_size):
                     end_idx = start_idx + self.batch_size
                     X_batch = X_shuffled[start_idx:end_idx]
                     y_batch = y_shuffled[start_idx:end_idx]
-
+    
                     _, cache, probs = self._forward_pass(X_batch, training=True)
                     total_loss, _ = self._compute_loss(probs, y_batch)
                     dW1, db1, dW2, db2, dgamma, dbeta = self._backward_pass(
                         X_batch, y_batch, cache, probs
                     )
                     self._update_parameters(dW1, db1, dW2, db2, dgamma, dbeta, current_lr)
-
-            # Print every 10 epochs
-            if epoch % 10 == 0:
-                accuracy = self._compute_accuracy(X, y_integer)
-                print(f"{epoch}\t{total_loss:.4f}\t\t{accuracy * 100:.2f}%")
-
+                    epoch_loss += total_loss
+                    num_batches += 1
+                epoch_loss /= num_batches
+    
+            # Compute training accuracy on the whole training set
+            accuracy = self._compute_accuracy(X, y_integer)
+            print(f"Epoch {epoch + 1}/{self.epochs}\tLoss: {epoch_loss:.4f}\tAccuracy: {accuracy * 100:.2f}%")
+    
             # Early Stopping check
             if self.early_stopping and self.validation_data is not None:
                 X_val, y_val = self.validation_data
                 val_probs = self.predict_proba(X_val)
                 val_loss, _ = self._compute_loss(val_probs, y_val)
-
+    
                 if val_loss < self.best_val_loss:
-                    # Improvement
                     self.best_val_loss = val_loss
                     self.no_improvement_count = 0
-                    # Save current best weights
                     self._save_current_weights()
                 else:
                     self.no_improvement_count += 1
-                    # If patience exceeded, stop
                     if self.no_improvement_count >= self.patience:
-                        print(f"Early stopping at epoch {epoch}.")
+                        print(f"Early stopping at epoch {epoch + 1}.")
                         self._restore_best_weights()
                         break
+    
+        # After training, report overall training metrics
+        final_probs = self.predict_proba(X)
+        final_loss, _ = self._compute_loss(final_probs, y_integer)
+        final_accuracy = self._compute_accuracy(X, y_integer)
+        print("-" * 40)
+        print(f"Final Training Loss: {final_loss:.4f}")
+        print(f"Final Training Accuracy: {final_accuracy * 100:.2f}%")
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """
@@ -551,31 +563,36 @@ class Classifier:
     def fit(self, data: list, target: list) -> None:
         """
         Train the neural network using the provided data and targets.
-
+    
         Parameters:
             data (list): Feature vectors from the game states.
             target (list): Corresponding action labels (0-3).
         """
         X = np.array(data, dtype=np.float32)
         y_integer = np.array(target, dtype=np.int32)
-
-        print(f"\nStarting training with {len(X)} samples...")
-
+    
+        total_samples = len(X)
+        print(f"\nStarting training with {total_samples} samples...")
+    
         # Simple train/validation split for early stopping + hyperparam search
         val_proportion: float = 0.2
-        split_index: int = int(len(X) * (1.0 - val_proportion))
-
+        split_index: int = int(total_samples * (1.0 - val_proportion))
         X_train, X_val = X[:split_index], X[split_index:]
         y_train, y_val = y_integer[:split_index], y_integer[split_index:]
-
+    
+        print(f"Dataset Metrics:")
+        print(f"  - Total samples: {total_samples}")
+        print(f"  - Training samples: {len(X_train)}")
+        print(f"  - Validation samples: {len(X_val)}")
+        
         # Optional hyperparameter tuning
         if self.enable_grid_search:
-            best_params = self._grid_search_hyperparams(X_train, y_train, X_val, y_val)
+            best_params: Dict[str, int | float] = self._grid_search_hyperparams(X_train, y_train, X_val, y_val)
             self._init_nn(best_params, X_train.shape[1], (X_val, y_val))
         else:
             # Initialise with default hyperparameters
             self._init_nn(None, X.shape[1], (X_val, y_val))
-
+    
         print("\nTraining progress (with early stopping if enabled):")
         print("Epoch\tLoss\t\tTraining Accuracy")
         print("-" * 40)
