@@ -3,14 +3,21 @@ from typing import Any, Dict, List, Optional, Tuple, Union, cast
 import os
 import contextlib
 
-# A simple dictionary-based container to hold the gradients during backpropagation.
-class BackpropGrads(dict):
-    pass
 
 class NeuralNet:
     """
-    Encapsulates the neural network logic for training and prediction.
-    Fully supports multiple hidden layers by accepting a list of hidden sizes.
+    A feed-forward neural network with back-propagation for classification tasks.
+    
+    This class supports training using gradient descent with options for momentum,
+    learning rate decay, L2 regularization, and gradient clipping. It also supports
+    batch normalization and dropout.
+    
+    The gradient descent update rule is:
+        v = momentum * v + lr * gradient
+        weight = weight - v
+    
+    Sources:
+        - 
     """
     def __init__(self,
                  input_size: int,
@@ -31,6 +38,29 @@ class NeuralNet:
                  early_stopping: bool = False,
                  patience: int = 10,
                  validation_data: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> None:
+        """
+        Initialize the neural network with the specified architecture and training parameters.
+
+        Args:
+            input_size: Number of input features
+            hidden_size: Number of neurons in hidden layers. Can be single int or list of ints
+            output_size: Number of output classes
+            learning_rate: Initial learning rate for gradient descent
+            epochs: Number of training epochs
+            l2_lambda: L2 regularization strength
+            batch_size: Mini-batch size. None means full batch
+            descent_type: Type of gradient descent ('batch' or 'mini-batch')
+            momentum: Momentum coefficient for gradient descent
+            lr_decay: Learning rate decay factor
+            use_batchnorm: Whether to use batch normalization
+            use_dropout: Whether to use dropout regularization
+            dropout_rate: Dropout probability (0 to 1)
+            use_grad_clip: Whether to clip gradients
+            grad_clip_norm: Maximum gradient norm for clipping
+            early_stopping: Whether to use early stopping
+            patience: Number of epochs to wait before early stopping
+            validation_data: Optional tuple of (X_val, y_val) for validation
+        """
         # Ensure hidden_size is a list
         if isinstance(hidden_size, int):
             hidden_size = [hidden_size]
@@ -81,6 +111,15 @@ class NeuralNet:
         self._init_velocity()
 
     def _init_parameters(self) -> None:
+        """
+        Initialize network parameters using He initialization for weights.
+        
+        Creates weight matrices and bias vectors for each layer. For batch normalization,
+        also initializes gamma (scale) and beta (shift) parameters, plus running statistics.
+        
+        The weights are initialized using He initialization:
+            w = randn(in_dim, out_dim) * sqrt(2/in_dim)
+        """
         in_dim: int = self.input_size
         for out_dim in self.hidden_sizes:
             w: np.ndarray = (np.random.randn(in_dim, out_dim)
@@ -102,6 +141,21 @@ class NeuralNet:
         self.biases.append(b_out)
 
     def _init_velocity(self) -> None:
+        """
+        Initialize velocity vectors for momentum-based gradient descent.
+    
+        Creates zero-filled arrays matching the shapes of weights and biases.
+        For batch normalization, also creates velocities for gamma and beta parameters.
+        These velocities are used in the momentum update rule:
+            v = momentum * v + learning_rate * gradient 
+    
+        This initialization is needed to avoid having to check for None values
+        during the first update step of training.
+
+        Sources:
+        - https://machinelearningmastery.com/gradient-descent-with-momentum-from-scratch/
+        - https://optimization.cbe.cornell.edu/index.php?title=Momentum
+        """
         for w in self.weights:
             self.velocity_w.append(np.zeros_like(w))
         for b in self.biases:
@@ -113,7 +167,13 @@ class NeuralNet:
                 self.velocity_beta.append(np.zeros_like(b_))
 
     def reset(self) -> None:
-        """Reset all parameters, velocities, and batch norm statistics."""
+        """
+        Reset the neural network to its initial state.
+    
+        Clears all weights, biases, velocities, and batch normalization statistics.
+        Reinitializes parameters using He initialization and zeros for velocities.
+        Used to restart training from scratch, or to reset a trained model.
+        """
         self.weights.clear()
         self.biases.clear()
         self.velocity_w.clear()
@@ -133,7 +193,26 @@ class NeuralNet:
         self.no_improvement_count = 0
 
     def fit(self, X: np.ndarray, y_integer: np.ndarray) -> None:
-        """Train the neural network with the provided data and labels."""
+        """
+        Train the neural network using mini-batch gradient descent.
+    
+        Handles both full-batch and mini-batch training modes.
+        Uses inverse scaling for learning rate decay:
+            lr = initial_lr / (1 + decay * epoch)
+        
+        Implements early stopping if enabled by monitoring validation loss.
+        Tracks and reports training metrics (loss, accuracy) per epoch.
+    
+        Args:
+            X: Input features array of shape (n_samples, n_features)
+            y_integer: Integer class labels of shape (n_samples,)
+
+        Sources: 
+        - 7CCSMPNN Pattern Recognition, Neural Networks and Deep Learning 
+        - https://machinelearningmastery.com/understand-the-dynamics-of-learning-rate-on-deep-learning-neural-networks/
+        - https://arxiv.org/abs/1908.01878
+        - https://towardsdatascience.com/early-stopping-a-cool-strategy-to-regularize-neural-networks-bfdeca6d722e/
+        """
         for epoch in range(self.epochs):
             # Improved learning rate decay using inverse scaling
             current_lr: float = self.learning_rate / (1 + self.lr_decay * epoch)
@@ -190,11 +269,47 @@ class NeuralNet:
         print(f"Final Training Accuracy: {final_accuracy * 100:.2f}%")
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        """Return the probability distribution over classes for input X."""
+        """
+        Compute probability distributions over possible classes for input samples.
+    
+        Used for making predictions and evaluating model performance. Calls _forward_pass 
+        in evaluation mode (training=False) to get class probabilities.
+    
+        Args:
+            X: Input features array of shape (n_samples, n_features)
+    
+        Returns:
+            Array of shape (n_samples, n_classes) containing class probabilities
+        """
         _, _, probs = self._forward_pass(X, training=False)
         return probs
 
     def _forward_pass(self, X: np.ndarray, training: bool = True) -> Tuple[List[np.ndarray], Dict[str, Any], np.ndarray]:
+        """
+        Perform forward propagation through the neural network.
+    
+        Computes activations for each layer including:
+        - Linear transformation (z = wx + b)
+        - Batch normalization if enabled
+        - ReLU activation
+        - Dropout if enabled during training
+        - Softmax output layer
+    
+        Used by both training and prediction to compute network outputs.
+    
+        Args:
+            X: Input features of shape (batch_size, input_size)
+            training: Whether to use training mode for batchnorm/dropout
+    
+        Returns: 
+            Tuple containing:
+            - List of layer activations
+            - Cache of intermediate values for backprop
+            - Output probabilities after softmax
+
+        Sources: 
+        - 7CCSMPNN Pattern Recognition, Neural Networks and Deep Learning 
+        """
         activations: List[np.ndarray] = []
         cache: Dict[str, Any] = {}
         layer_input: np.ndarray = X
@@ -252,6 +367,26 @@ class NeuralNet:
         return activations, cache, probs
 
     def _compute_loss(self, probs: np.ndarray, y_integer: np.ndarray) -> Tuple[float, float]:
+        """
+        Calculate the cross entropy loss with L2 regularization.
+        
+        Computes two components:
+        1. Data loss: -log(p[correct_class]) averaged over samples
+        2. Regularization loss: (λ/2) * sum(w^2) for all weights
+        
+        Total loss = data_loss + reg_loss
+    
+        Args:
+            probs: Predicted probabilities from softmax, shape (n_samples, n_classes)
+            y_integer: True class labels as integers, shape (n_samples,)
+            
+        Returns:
+            Tuple of (total_loss, data_loss) as floats
+
+        Sources:
+        - 7CCSMPNN Pattern Recognition, Neural Networks and Deep Learning
+        - https://www.datacamp.com/tutorial/loss-function-in-machine-learning
+        """
         correct_logprobs: np.ndarray = -np.log(probs[np.arange(probs.shape[0]), y_integer] + 1e-8)
         data_loss: float = float(np.mean(correct_logprobs))
         reg_loss: float = 0.0
@@ -261,6 +396,31 @@ class NeuralNet:
         return total_loss, data_loss
 
     def _backward_pass(self, X: np.ndarray, y_integer: np.ndarray, cache: Dict[str, Any], probs: np.ndarray) -> Dict[str, List[Optional[np.ndarray]]]:
+        """
+        Compute gradients for backpropagation through the network.
+    
+        Calculates gradients for weights, biases, and batch normalisation parameters.
+        Handles dropout masks and ReLU derivatives during backward pass.
+        Includes L2 regularization gradients.
+    
+        Key gradient flows:
+        - Output layer gradient: (probs - one_hot_y) / batch_size
+        - Hidden layer gradient: d_out * w.T * relu'(z) 
+        - Batch norm gradient: Follows chain rule through normalisation equations
+    
+        Args:
+            X: Input features of shape (batch_size, input_size)
+            y_integer: True class labels as integers 
+            cache: Saved values from forward pass for gradient computation
+            probs: Output probabilities from forward pass
+    
+        Returns:
+            Dictionary containing gradients for weights (dW), biases (db),
+            and batch norm parameters (dgamma, dbeta)
+
+        Sources: 
+        - 7CCSMPNN Pattern Recognition, Neural Networks and Deep Learning 
+        """
         dW: List[Optional[np.ndarray]] = [np.zeros_like(w) for w in self.weights]
         db: List[Optional[np.ndarray]] = [np.zeros_like(b) for b in self.biases]
         dgamma: List[Optional[np.ndarray]] = [None] * self.num_hidden_layers
@@ -321,6 +481,21 @@ class NeuralNet:
         return {"dW": dW, "db": db, "dgamma": dgamma, "dbeta": dbeta}
 
     def _update_parameters(self, grads: Dict[str, List[Optional[np.ndarray]]], current_lr: float) -> None:
+        """
+        Update network parameters using momentum-based gradient descent.
+    
+        Applies gradient updates to weights, biases and batch norm parameters if enabled.
+        Uses gradient clipping if enabled to prevent exploding gradients.
+        
+        Update rule for each parameter:
+            v = momentum * v + current_lr * gradient
+            param = param - v
+    
+        Args:
+            grads: Dictionary containing gradients for weights (dW), biases (db), 
+                  and batch norm parameters (dgamma, dbeta)
+            current_lr: Current learning rate after decay
+        """
         # Update weights with momentum and optional gradient clipping
         for i, dw_ in enumerate(grads['dW']):
             if dw_ is not None:
@@ -361,11 +536,37 @@ class NeuralNet:
                     self.beta[i] -= self.velocity_beta[i]
 
     def _compute_accuracy(self, X: np.ndarray, y_integer: np.ndarray) -> float:
+        """
+        Calculate classification accuracy on given data.
+    
+        Computes the proportion of correct predictions by:
+        1. Getting predicted probabilities using predict_proba()
+        2. Taking argmax to get predicted class labels
+        3. Comparing with true labels to get accuracy
+    
+        Args:
+            X: Input features array of shape (n_samples, n_features)
+            y_integer: True class labels as integers of shape (n_samples,)
+    
+        Returns:
+            Classification accuracy as a float between 0 and 1
+        """
         probs: np.ndarray = self.predict_proba(X)
         predictions: np.ndarray = np.argmax(probs, axis=1)
         return float(np.mean(predictions == y_integer))
 
     def _save_current_weights(self) -> None:
+        """
+        Store a copy of the current network parameters.
+    
+        Creates deep copies of:
+        - Weights and biases
+        - Momentum velocity terms
+        - Batch normalization parameters (if enabled)
+        
+        Used by early stopping to save the best performing model parameters
+        during training for later restoration.
+        """
         self.best_weights = {
             'weights': [w.copy() for w in self.weights],
             'biases': [b.copy() for b in self.biases],
@@ -379,6 +580,17 @@ class NeuralNet:
             self.best_weights['velocity_beta'] = [vb.copy() for vb in self.velocity_beta]
 
     def _restore_best_weights(self) -> None:
+        """
+        Restore network parameters to their best historical values.
+    
+        Used by early stopping to revert to the best performing model parameters.
+        Restores:
+        - Weights and biases
+        - Momentum velocities
+        - Batch normalization parameters (if enabled)
+    
+        Called when validation loss stops improving for more than 'patience' epochs.
+        """
         if not self.best_weights:
             return
         for i in range(len(self.weights)):
@@ -393,14 +605,43 @@ class NeuralNet:
                 self.velocity_gamma[i] = self.best_weights['velocity_gamma'][i]
                 self.velocity_beta[i] = self.best_weights['velocity_beta'][i]
 
+
+
 class Classifier:
     """
-    A custom neural network classifier for Pacman's movement decisions.
-    Wraps around the NeuralNet logic.
+    A wrapper class for neural network-based Pacman game agent.
+    
+    Manages neural network initialization, training, and prediction for Pacman moves.
+    Features include:
+    - Configurable network architecture and hyperparameters
+    - Automated hyperparameter optimization via grid search
+    - Data splitting into train/validation/test sets
+    - Early stopping with validation data
+    - Move prediction based on game state features
+
+    The neural network is initialized during training to match input dimensions.
+    Predictions map to Pacman moves as:
+        0: North, 1: East, 2: South, 3: West
+
+    Sources:
+        - 
     """
     def __init__(self) -> None:
+        """
+        Initialise the classifier with default hyperparameters.
+    
+        Sets up neural network configuration including:
+        - Architecture (hidden layers, output size)
+        - Training parameters (learning rate, epochs, regularization)
+        - Optimization settings (batch size, momentum, learning rate decay)
+        - Regularization options (batch norm, dropout, gradient clipping)
+        - Early stopping configuration
+        - Grid search toggle
+    
+        The network itself (self.nn) is initialized later when fit() is called.
+        """
         self.nn: Optional[NeuralNet] = None
-        self.hidden_layers: List[int] = [32]  # Default single hidden layer with 32 neurons
+        self.hidden_layers: List[int] = [32]  # Default
         self.output_size: int = 4
         self.learning_rate: float = 0.01
         self.epochs: int = 150
@@ -425,7 +666,12 @@ class Classifier:
         print(f"Classifier initialised with hidden_layers={self.hidden_layers}, learning_rate={self.learning_rate}")
 
     def reset(self) -> None:
-        """Reset the neural network if it has already been initialised."""
+        """
+        Reset the neural network if it has already been initialized.
+        
+        Resets all model parameters including weights, biases and batch normalization stats
+        back to their initial values. Used to restart training from scratch.
+        """
         print("\nResetting model weights, biases, and BN stats...")
         if self.nn is not None:
             self.nn.reset()
@@ -476,8 +722,18 @@ class Classifier:
 
     def predict(self, features: Any, legal: List[str]) -> int:
         """
-        Predict the best action given the feature vector and legal moves.
-        Returns the chosen action as an integer (0, 1, 2, or 3).
+        Make a move prediction for Pacman given features and legal moves.
+    
+        Converts feature vector to neural network input, gets class probabilities,
+        and selects highest probability legal move. Falls back to random move if
+        network not initialized or no legal moves.
+    
+        Args:
+            features: Input feature vector for current game state
+            legal: List of legal moves as strings ('North', 'South', 'East', 'West')
+    
+        Returns:
+            Integer representing chosen move (0=North, 1=East, 2=South, 3=West)
         """
         if self.nn is None:
             return int(np.random.randint(4))
@@ -500,6 +756,20 @@ class Classifier:
         return legal_actions[best_index]
 
     def _init_nn(self, params: Optional[Dict[str, Any]], input_size: int, val_data: Tuple[np.ndarray, np.ndarray]) -> None:
+        """
+        Initialise a new neural network with specified or default parameters.
+    
+        Creates a NeuralNet instance with either:
+        - Default parameters from self if params is None
+        - Grid search optimized parameters if params is provided
+    
+        Args:
+            params: Optional dict with hidden_layers and dropout_rate from grid search
+            input_size: Number of input features 
+            val_data: Tuple of (X_val, y_val) for validation during training
+    
+        The method is called by fit() after data preparation and optional grid search.
+        """
         if params is None:
             hidden_layers: List[int] = self.hidden_layers
             dropout_rate: float = self.dropout_rate
@@ -530,6 +800,25 @@ class Classifier:
         )
 
     def _grid_search_hyperparams(self, X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray, y_val: np.ndarray) -> Dict[str, Any]:
+        """
+        Perform grid search to find optimal neural network architecture and dropout rate.
+    
+        Tests combinations of:
+        - Hidden layer configurations (1-3 layers with varying widths)
+        - Dropout rates (0.1, 0.3, 0.5, 0.7)
+    
+        Trains temporary networks on each combination and evaluates on validation set.
+        Used before full training to find best hyperparameters.
+    
+        Args:
+            X_train: Training features array
+            y_train: Training labels array 
+            X_val: Validation features array
+            y_val: Validation labels array
+    
+        Returns:
+            Dict with best performing hidden_layers and dropout_rate
+        """
         layer_configs: List[List[int]] = [
             [4], [6], [8], [12], [16], [20], [24], [28], [32],
             [4, 4], [4, 6], [8, 4], [4, 8], [6, 8],
