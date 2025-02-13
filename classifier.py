@@ -1,5 +1,7 @@
 import numpy as np
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
+import os
+import contextlib
 
 # A simple dictionary-based container to hold the gradients during backpropagation.
 class BackpropGrads(dict):
@@ -133,7 +135,8 @@ class NeuralNet:
     def fit(self, X: np.ndarray, y_integer: np.ndarray) -> None:
         """Train the neural network with the provided data and labels."""
         for epoch in range(self.epochs):
-            current_lr: float = self.learning_rate * ((1.0 - self.lr_decay) ** epoch)
+            # Improved learning rate decay using inverse scaling
+            current_lr: float = self.learning_rate / (1 + self.lr_decay * epoch)
             indices: np.ndarray = np.arange(X.shape[0])
             np.random.shuffle(indices)
             X_shuffled: np.ndarray = X[indices]
@@ -221,7 +224,8 @@ class NeuralNet:
             a: np.ndarray = np.maximum(0, a_before_relu)
             if self.use_dropout and training:
                 dropout_mask: np.ndarray = (np.random.rand(*a.shape) > self.dropout_rate).astype(a.dtype)
-                a = a * dropout_mask
+                # Use inverted dropout scaling so that expected activations remain consistent.
+                a = a * dropout_mask / (1.0 - self.dropout_rate)
             else:
                 dropout_mask = np.ones_like(a)
             activations.append(a)
@@ -317,19 +321,44 @@ class NeuralNet:
         return {"dW": dW, "db": db, "dgamma": dgamma, "dbeta": dbeta}
 
     def _update_parameters(self, grads: Dict[str, List[Optional[np.ndarray]]], current_lr: float) -> None:
+        # Update weights with momentum and optional gradient clipping
         for i, dw_ in enumerate(grads['dW']):
             if dw_ is not None:
-                self.weights[i] -= current_lr * dw_
+                grad_dw = cast(np.ndarray, dw_)
+                if self.use_grad_clip:
+                    grad_norm = np.linalg.norm(grad_dw)
+                    if grad_norm > self.grad_clip_norm:
+                        grad_dw = grad_dw * (self.grad_clip_norm / grad_norm)
+                self.velocity_w[i] = self.momentum * self.velocity_w[i] + current_lr * grad_dw
+                self.weights[i] -= self.velocity_w[i]
         for i, db_ in enumerate(grads['db']):
             if db_ is not None:
-                self.biases[i] -= current_lr * db_
+                grad_db = cast(np.ndarray, db_)
+                if self.use_grad_clip:
+                    grad_norm = np.linalg.norm(grad_db)
+                    if grad_norm > self.grad_clip_norm:
+                        grad_db = grad_db * (self.grad_clip_norm / grad_norm)
+                self.velocity_b[i] = self.momentum * self.velocity_b[i] + current_lr * grad_db
+                self.biases[i] -= self.velocity_b[i]
         if self.use_batchnorm:
             for i, dgamma_ in enumerate(grads['dgamma']):
                 if dgamma_ is not None:
-                    self.gamma[i] -= current_lr * dgamma_
+                    grad_dgamma = cast(np.ndarray, dgamma_)
+                    if self.use_grad_clip:
+                        grad_norm = np.linalg.norm(grad_dgamma)
+                        if grad_norm > self.grad_clip_norm:
+                            grad_dgamma = grad_dgamma * (self.grad_clip_norm / grad_norm)
+                    self.velocity_gamma[i] = self.momentum * self.velocity_gamma[i] + current_lr * grad_dgamma
+                    self.gamma[i] -= self.velocity_gamma[i]
             for i, dbeta_ in enumerate(grads['dbeta']):
                 if dbeta_ is not None:
-                    self.beta[i] -= current_lr * dbeta_
+                    grad_dbeta = cast(np.ndarray, dbeta_)
+                    if self.use_grad_clip:
+                        grad_norm = np.linalg.norm(grad_dbeta)
+                        if grad_norm > self.grad_clip_norm:
+                            grad_dbeta = grad_dbeta * (self.grad_clip_norm / grad_norm)
+                    self.velocity_beta[i] = self.momentum * self.velocity_beta[i] + current_lr * grad_dbeta
+                    self.beta[i] -= self.velocity_beta[i]
 
     def _compute_accuracy(self, X: np.ndarray, y_integer: np.ndarray) -> float:
         probs: np.ndarray = self.predict_proba(X)
@@ -511,16 +540,20 @@ class Classifier:
             [2, 8, 12], [6, 8, 12]
         ]
         dropout_rates: List[float] = [0.1, 0.3, 0.5, 0.7]
+        total_iterations: int = len(layer_configs) * len(dropout_rates)
+        current_iteration: int = 0
         best_val_acc: float = -1.0
         best_params: Dict[str, Any] = {'hidden_layers': self.hidden_layers, 'dropout_rate': self.dropout_rate}
         for layers in layer_configs:
             for dr in dropout_rates:
+                current_iteration += 1
+                print(f"Grid search progress: {current_iteration}/{total_iterations} combinations evaluated", flush=True)
                 temp_nn: NeuralNet = NeuralNet(
                     input_size=X_train.shape[1],
                     hidden_size=layers,
                     output_size=self.output_size,
                     learning_rate=self.learning_rate,
-                    epochs=20,  # shorter training for quicker search
+                    epochs=40,
                     l2_lambda=self.l2_lambda,
                     batch_size=self.batch_size,
                     descent_type=self.descent_type,
@@ -533,7 +566,9 @@ class Classifier:
                     grad_clip_norm=self.grad_clip_norm,
                     early_stopping=False
                 )
-                temp_nn.fit(X_train, y_train)
+                # Reduce verbosity during grid search by redirecting stdout
+                with open(os.devnull, 'w') as f, contextlib.redirect_stdout(f):
+                    temp_nn.fit(X_train, y_train)
                 probs: np.ndarray = temp_nn.predict_proba(X_val)
                 predictions: np.ndarray = np.argmax(probs, axis=1)
                 val_acc: float = float(np.mean(predictions == y_val))
