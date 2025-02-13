@@ -9,8 +9,8 @@ class NeuralNet:
     A feed-forward neural network with back-propagation for classification tasks.
     
     This class supports training using gradient descent with options for momentum,
-    learning rate decay, L2 regularization, and gradient clipping. It also supports
-    batch normalization and dropout.
+    learning rate decay, L2 regularisation, and gradient clipping. It also supports
+    batch normalisation and dropout.
     
     The gradient descent update rule is:
         v = momentum * v + lr * gradient
@@ -47,13 +47,13 @@ class NeuralNet:
             output_size: Number of output classes
             learning_rate: Initial learning rate for gradient descent
             epochs: Number of training epochs
-            l2_lambda: L2 regularization strength
+            l2_lambda: L2 regularisation strength
             batch_size: Mini-batch size. None means full batch
             descent_type: Type of gradient descent ('batch' or 'mini-batch')
             momentum: Momentum coefficient for gradient descent
             lr_decay: Learning rate decay factor
-            use_batchnorm: Whether to use batch normalization
-            use_dropout: Whether to use dropout regularization
+            use_batchnorm: Whether to use batch normalisation
+            use_dropout: Whether to use dropout regularisation
             dropout_rate: Dropout probability (0 to 1)
             use_grad_clip: Whether to clip gradients
             grad_clip_norm: Maximum gradient norm for clipping
@@ -112,13 +112,16 @@ class NeuralNet:
 
     def _init_parameters(self) -> None:
         """
-        Initialize network parameters using He initialization for weights.
+        Initialize network parameters using He initialisation for weights.
         
-        Creates weight matrices and bias vectors for each layer. For batch normalization,
+        Creates weight matrices and bias vectors for each layer. For batch normalisation,
         also initializes gamma (scale) and beta (shift) parameters, plus running statistics.
         
-        The weights are initialized using He initialization:
+        The weights are initialized using He initialisation:
             w = randn(in_dim, out_dim) * sqrt(2/in_dim)
+
+        Sources:
+        - https://arxiv.org/abs/1502.01852
         """
         in_dim: int = self.input_size
         for out_dim in self.hidden_sizes:
@@ -133,7 +136,7 @@ class NeuralNet:
                 self.running_mean.append(np.zeros((1, out_dim), dtype=np.float32))
                 self.running_var.append(np.ones((1, out_dim), dtype=np.float32))
             in_dim = out_dim
-        # Output layer initialization
+        # Output layer initialisation
         w_out: np.ndarray = (np.random.randn(in_dim, self.output_size)
                  .astype(np.float32) * np.sqrt(2.0 / in_dim))
         b_out: np.ndarray = np.zeros((1, self.output_size), dtype=np.float32)
@@ -145,11 +148,11 @@ class NeuralNet:
         Initialize velocity vectors for momentum-based gradient descent.
     
         Creates zero-filled arrays matching the shapes of weights and biases.
-        For batch normalization, also creates velocities for gamma and beta parameters.
+        For batch normalisation, also creates velocities for gamma and beta parameters.
         These velocities are used in the momentum update rule:
             v = momentum * v + learning_rate * gradient 
     
-        This initialization is needed to avoid having to check for None values
+        This initialisation is needed to avoid having to check for None values
         during the first update step of training.
 
         Sources:
@@ -170,8 +173,8 @@ class NeuralNet:
         """
         Reset the neural network to its initial state.
     
-        Clears all weights, biases, velocities, and batch normalization statistics.
-        Reinitializes parameters using He initialization and zeros for velocities.
+        Clears all weights, biases, velocities, and batch normalisation statistics.
+        Reinitializes parameters using He initialisation and zeros for velocities.
         Used to restart training from scratch, or to reset a trained model.
         """
         self.weights.clear()
@@ -290,7 +293,7 @@ class NeuralNet:
     
         Computes activations for each layer including:
         - Linear transformation (z = wx + b)
-        - Batch normalization if enabled
+        - Batch normalisation if enabled
         - ReLU activation
         - Dropout if enabled during training
         - Softmax output layer
@@ -309,6 +312,9 @@ class NeuralNet:
 
         Sources: 
         - 7CCSMPNN Pattern Recognition, Neural Networks and Deep Learning 
+        - https://www.datacamp.com/tutorial/batch-normalization-tensorflow
+        - https://towardsdatascience.com/dropout-in-neural-networks-47a162d621d9/
+        - https://www.analyticsvidhya.com/blog/2021/04/introduction-to-softmax-for-neural-network/
         """
         activations: List[np.ndarray] = []
         cache: Dict[str, Any] = {}
@@ -368,11 +374,11 @@ class NeuralNet:
 
     def _compute_loss(self, probs: np.ndarray, y_integer: np.ndarray) -> Tuple[float, float]:
         """
-        Calculate the cross entropy loss with L2 regularization.
+        Calculate the cross entropy loss with L2 regularisation.
         
         Computes two components:
         1. Data loss: -log(p[correct_class]) averaged over samples
-        2. Regularization loss: (λ/2) * sum(w^2) for all weights
+        2. Regularisation loss: (λ/2) * sum(w^2) for all weights
         
         Total loss = data_loss + reg_loss
     
@@ -401,7 +407,7 @@ class NeuralNet:
     
         Calculates gradients for weights, biases, and batch normalisation parameters.
         Handles dropout masks and ReLU derivatives during backward pass.
-        Includes L2 regularization gradients.
+        Includes L2 regularisation gradients.
     
         Key gradient flows:
         - Output layer gradient: (probs - one_hot_y) / batch_size
@@ -495,6 +501,9 @@ class NeuralNet:
             grads: Dictionary containing gradients for weights (dW), biases (db), 
                   and batch norm parameters (dgamma, dbeta)
             current_lr: Current learning rate after decay
+
+        Sources:
+        - https://machinelearningmastery.com/how-to-avoid-exploding-gradients-in-neural-networks-with-gradient-clipping/
         """
         # Update weights with momentum and optional gradient clipping
         for i, dw_ in enumerate(grads['dW']):
@@ -562,7 +571,7 @@ class NeuralNet:
         Creates deep copies of:
         - Weights and biases
         - Momentum velocity terms
-        - Batch normalization parameters (if enabled)
+        - Batch normalisation parameters (if enabled)
         
         Used by early stopping to save the best performing model parameters
         during training for later restoration.
@@ -587,7 +596,7 @@ class NeuralNet:
         Restores:
         - Weights and biases
         - Momentum velocities
-        - Batch normalization parameters (if enabled)
+        - Batch normalisation parameters (if enabled)
     
         Called when validation loss stops improving for more than 'patience' epochs.
         """
@@ -611,10 +620,10 @@ class Classifier:
     """
     A wrapper class for neural network-based Pacman game agent.
     
-    Manages neural network initialization, training, and prediction for Pacman moves.
+    Manages neural network initialisation, training, and prediction for Pacman moves.
     Features include:
     - Configurable network architecture and hyperparameters
-    - Automated hyperparameter optimization via grid search
+    - Automated hyperparameter optimisation via grid search
     - Data splitting into train/validation/test sets
     - Early stopping with validation data
     - Move prediction based on game state features
@@ -632,9 +641,9 @@ class Classifier:
     
         Sets up neural network configuration including:
         - Architecture (hidden layers, output size)
-        - Training parameters (learning rate, epochs, regularization)
-        - Optimization settings (batch size, momentum, learning rate decay)
-        - Regularization options (batch norm, dropout, gradient clipping)
+        - Training parameters (learning rate, epochs, regularisation)
+        - Optimisation settings (batch size, momentum, learning rate decay)
+        - Regularisation options (batch norm, dropout, gradient clipping)
         - Early stopping configuration
         - Grid search toggle
     
@@ -669,7 +678,7 @@ class Classifier:
         """
         Reset the neural network if it has already been initialized.
         
-        Resets all model parameters including weights, biases and batch normalization stats
+        Resets all model parameters including weights, biases and batch normalisation stats
         back to their initial values. Used to restart training from scratch.
         """
         print("\nResetting model weights, biases, and BN stats...")
