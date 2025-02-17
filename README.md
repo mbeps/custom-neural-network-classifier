@@ -1,22 +1,5 @@
 # Pacman Movement Classifier
 
-- [Pacman Movement Classifier](#pacman-movement-classifier)
-- [Introduction](#introduction)
-- [Technical Features](#technical-features)
-	- [Core Classification Architecture](#core-classification-architecture)
-	- [Optimisation Techniques](#optimisation-techniques)
-	- [Regularisation Methods](#regularisation-methods)
-	- [Training Management](#training-management)
-	- [Implementation Features](#implementation-features)
-- [Requirements](#requirements)
-- [Usage](#usage)
-	- [Using Conda](#using-conda)
-	- [Using Poetry](#using-poetry)
-- [Sources](#sources)
-
-
-# Introduction
-
 This project implements a custom neural network classifier to control Pacman's movements. The classifier decides Pacman's next move based on the game state, which includes information about nearby walls, food, and ghosts. The implementation focuses on machine learning principles rather than optimal game performance.
 
 The solution features a sophisticated neural network with batch normalisation, dropout regularisation, and momentum-based optimisation. While simpler approaches like k-NN or Naive Bayes could work, this implementation demonstrates advanced classification techniques with proper software engineering practices.
